@@ -11,7 +11,6 @@ import (
 type Config struct {
 	GRPCPort int    `json:"grpc_port"`
 	LogLevel string `json:"log_level"`
-	LogFile  string `json:"log_file"`
 }
 
 func Load() (*Config, error) {
@@ -26,6 +25,10 @@ func Load() (*Config, error) {
 
 	if err := cfg.loadFromEnv(); err != nil {
 		return nil, fmt.Errorf("failed to load config: %w", err)
+	}
+
+	if err := cfg.validate(); err != nil {
+		return nil, fmt.Errorf("config validation failed: %w", err)
 	}
 
 	return cfg, nil
