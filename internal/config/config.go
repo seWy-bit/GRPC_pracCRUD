@@ -10,6 +10,7 @@ import (
 
 type Config struct {
 	GRPCPort int    `json:"grpc_port"`
+	HTTPPort int    `json:"http_port"`
 	LogLevel string `json:"log_level"`
 }
 
@@ -20,6 +21,7 @@ func Load() (*Config, error) {
 
 	cfg := &Config{
 		GRPCPort: 50051,
+		HTTPPort: 8080,
 		LogLevel: "info",
 	}
 
@@ -43,6 +45,14 @@ func (c *Config) loadFromEnv() error {
 		c.GRPCPort = port
 	}
 
+	if portStr := os.Getenv("HTTP_PORT"); portStr != "" {
+		port, err := strconv.Atoi(portStr)
+		if err != nil {
+			return fmt.Errorf("invalid HTTP_PORT: %w", err)
+		}
+		c.HTTPPort = port
+	}
+
 	if level := os.Getenv("LOG_LEVEL"); level != "" {
 		c.LogLevel = level
 	}
@@ -53,6 +63,10 @@ func (c *Config) loadFromEnv() error {
 func (c *Config) validate() error {
 	if c.GRPCPort < 1 || c.GRPCPort > 65535 {
 		return fmt.Errorf("GRPC_PORT must be between 1 and 65535, got %d", c.GRPCPort)
+	}
+
+	if c.HTTPPort < 1 || c.HTTPPort > 65535 {
+		return fmt.Errorf("HTTP_PORT must be between 1 and 65535, got %d", c.HTTPPort)
 	}
 
 	validLevels := map[string]bool{
