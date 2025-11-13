@@ -2,9 +2,10 @@ package service
 
 import (
 	"context"
-	"sync"
+	"fmt"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
@@ -13,14 +14,12 @@ import (
 
 type OrderService struct {
 	test.UnimplementedOrderServiceServer
-	mu     *sync.RWMutex
-	orders map[string]*test.Order
+	db *pgxpool.Pool
 }
 
-func NewOrderService() *OrderService {
+func NewOrderService(db *pgxpool.Pool) *OrderService {
 	return &OrderService{
-		mu:     &sync.RWMutex{},
-		orders: make(map[string]*test.Order),
+		db: db,
 	}
 }
 
@@ -39,15 +38,11 @@ func (s *OrderService) CreateOrder(ctx context.Context, req *test.CreateOrderReq
 
 	id := uuid.New().String()
 
-	order := &test.Order{
-		Id:       id,
-		Item:     req.Item,
-		Quantity: req.Quantity,
+	query := `INSERT INTO orders (id, item, quantity) VALUES ($1, $2, $3)`
+	_, err := s.db.Exec(ctx, query, id, req.Item, req.Quantity)
+	if err != nil {
+		return nil, status.Error(codes.Internal, fmt.Sprintf("failed to create order: %v", err))
 	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.orders[id] = order
 
 	return &test.CreateOrderResponse{Id: id}, nil
 }
@@ -61,15 +56,14 @@ func (s *OrderService) GetOrder(ctx context.Context, req *test.GetOrderRequest) 
 		return nil, status.Error(codes.InvalidArgument, "id заказа не может быть пустым")
 	}
 
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	order, exists := s.orders[req.Id]
-
-	if !exists {
+	var order test.Order
+	query := `SELECT id, item, quantity FROM orders where id = $1`
+	err := s.db.QueryRow(ctx, query, req.Id).Scan(&order.Id, &order.Item, &order.Quantity)
+	if err != nil {
 		return nil, status.Error(codes.NotFound, "заказ не найден")
 	}
 
-	return &test.GetOrderResponse{Order: order}, nil
+	return &test.GetOrderResponse{Order: &order}, nil
 }
 
 func (s *OrderService) UpdateOrder(ctx context.Context, req *test.UpdateOrderRequest) (*test.UpdateOrderResponse, error) {
@@ -89,18 +83,24 @@ func (s *OrderService) UpdateOrder(ctx context.Context, req *test.UpdateOrderReq
 		return nil, status.Error(codes.InvalidArgument, "количество товара должно быть положительным числом")
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	order, exists := s.orders[req.Id]
+	query := `UPDATE orders SET item = $1, quantity = $2 WHERE id = $3`
+	result, err := s.db.Exec(ctx, query, req.Item, req.Quantity, req.Id)
+	if err != nil {
+		return nil, status.Error(codes.Internal, fmt.Sprintf("failed to update order: %v", err))
+	}
 
-	if !exists {
+	if result.RowsAffected() == 0 {
 		return nil, status.Error(codes.NotFound, "заказ не найден")
 	}
 
-	order.Item = req.Item
-	order.Quantity = req.Quantity
+	var order test.Order
+	getQuery := `SELECT id, item, quantity FROM orders WHERE id = $1`
+	err = s.db.QueryRow(ctx, getQuery, req.Id).Scan(&order.Id, &order.Item, &order.Quantity)
+	if err != nil {
+		return nil, status.Error(codes.Internal, fmt.Sprintf("failed to get updated order: %v", err))
+	}
 
-	return &test.UpdateOrderResponse{Order: order}, nil
+	return &test.UpdateOrderResponse{Order: &order}, nil
 }
 
 func (s *OrderService) DeleteOrder(ctx context.Context, req *test.DeleteOrderRequest) (*test.DeleteOrderResponse, error) {
@@ -112,15 +112,15 @@ func (s *OrderService) DeleteOrder(ctx context.Context, req *test.DeleteOrderReq
 		return nil, status.Error(codes.InvalidArgument, "ID заказа не может быть пустым")
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	_, exists := s.orders[req.Id]
-	if !exists {
-		return nil, status.Error(codes.NotFound, "заказ не найден")
+	query := `DELETE FROM orders WHERE id = $1`
+	result, err := s.db.Exec(ctx, query, req.Id)
+	if err != nil {
+		return nil, status.Error(codes.Internal, fmt.Sprintf("failed to delete order: %v", err))
 	}
 
-	delete(s.orders, req.Id)
+	if result.RowsAffected() == 0 {
+		return nil, status.Error(codes.NotFound, "заказ не найден")
+	}
 
 	return &test.DeleteOrderResponse{Success: true}, nil
 }
@@ -130,14 +130,25 @@ func (s *OrderService) ListOrders(ctx context.Context, req *test.ListOrdersReque
 		return nil, err
 	}
 
-	s.mu.RLock()
-	defer s.mu.RUnlock()
+	query := `SELECT id, item, quantity FROM orders ORDER BY created_at DESC`
+	rows, err := s.db.Query(ctx, query)
+	if err != nil {
+		return nil, status.Error(codes.Internal, fmt.Sprintf("failed to list orders: %v", err))
+	}
+	defer rows.Close()
 
-	orderList := make([]*test.Order, 0, len(s.orders))
-
-	for _, order := range s.orders {
-		orderList = append(orderList, order)
+	var orders []*test.Order
+	for rows.Next() {
+		var order test.Order
+		if err := rows.Scan(&order.Id, &order.Item, &order.Quantity); err != nil {
+			return nil, status.Error(codes.Internal, fmt.Sprintf("failed to scan order: %v", err))
+		}
+		orders = append(orders, &order)
 	}
 
-	return &test.ListOrdersResponse{Orders: orderList}, nil
+	if err := rows.Err(); err != nil {
+		return nil, status.Error(codes.Internal, fmt.Sprintf("error iterating orders: %v", err))
+	}
+
+	return &test.ListOrdersResponse{Orders: orders}, nil
 }
