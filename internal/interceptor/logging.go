@@ -23,20 +23,20 @@ func LoggingInterceptor() grpc.UnaryServerInterceptor {
 		resp, err := handler(ctx, req)
 		duration := time.Since(startTime)
 
+		logFields := []interface{}{
+			"method", info.FullMethod,
+			"duration", duration,
+		}
+
 		if err != nil {
 			st, _ := status.FromError(err)
-			logger.Log.Errorw("gRPC request failed",
-				"method", info.FullMethod,
-				"duration", duration,
-				"error", err.Error(),
-				"error_code", st.Code().String(),
-			)
+			logFields = append(logFields, "error", err.Error(), "error_code", st.Code().String())
+			logger.Log.Errorw("gRPC request failed", logFields...)
 		} else {
-			logger.Log.Infow("gRPC request completed",
-				"method", info.FullMethod,
-				"duration", duration,
-				"response", resp,
-			)
+			if info.FullMethod == "/api.OrderService/GetOrder" || info.FullMethod == "/api.OrderService/ListOrders" {
+				logFields = append(logFields, "cached", "possible")
+			}
+			logger.Log.Infow("gRPC request completed", logFields...)
 		}
 
 		return resp, err

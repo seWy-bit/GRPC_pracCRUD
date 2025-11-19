@@ -55,7 +55,7 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	grpcServer := startGRPCServer(cfg, dbPool)
+	grpcServer := startGRPCServer(cfg, dbPool, redisClient)
 
 	httpServer := startHTTPServer(ctx, cfg)
 
@@ -161,12 +161,12 @@ func runMigrations(cfg *config.Config) error {
 	return nil
 }
 
-func startGRPCServer(cfg *config.Config, dbPool *pgxpool.Pool) *grpc.Server {
+func startGRPCServer(cfg *config.Config, dbPool *pgxpool.Pool, redisClient *redis.Client) *grpc.Server {
 	grpcServer := grpc.NewServer(
 		grpc.UnaryInterceptor(interceptor.LoggingInterceptor()),
 	)
 
-	orderService := service.NewOrderService(dbPool)
+	orderService := service.NewOrderService(dbPool, redisClient)
 	test.RegisterOrderServiceServer(grpcServer, orderService)
 
 	reflection.Register(grpcServer)
